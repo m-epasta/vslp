@@ -1,14 +1,13 @@
 [package]
-name = "vscript-lsp"
+name = "vlsp"
 version = "0.1.0"
 edition = "2021"
 description = "Language Server Protocol implementation for VScript"
 license = "MIT"
-authors = ["VScript Team"]
-repository = "https://github.com/vscript/vscript-lsp"
+repository = "https://github.com/m-epasta/vslp"
 
 [[bin]]
-name = "vscript-lsp"
+name = "vslp"
 path = "src/main.rs"
 
 [dependencies]
