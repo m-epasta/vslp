@@ -116,10 +116,10 @@ fn find_identifier_at_position(content: &str, offset: usize) -> Option<String> {
     let tokens = lexer.tokenize();
 
     for token in tokens {
-        let token_start = usize::from(token.range.start());
+        let start = usize::from(token.range.start());
         let token_end = usize::from(token.range.end());
 
-        if offset >= token_start && offset <= token_end && token.kind == TokenKind::Identifier {
+        if offset >= start && offset <= token_end && token.kind == TokenKind::Identifier {
             return Some(token.text);
         }
     }
@@ -206,7 +206,7 @@ impl DefinitionFinder {
 
                 // Add parameters to scope
                 for param in &func.params {
-                    self.add_to_scope(&param.name.name, param.name.range);
+                    self.add_to_scope(&param.name, param.range);
                 }
 
                 self.visit_block(&func.body);
@@ -296,7 +296,7 @@ impl DefinitionFinder {
             }
             Statement::For(for_stmt) => {
                 self.push_scope();
-                if let Some(ref init) = for_stmt.init {
+                if let Some(ref init) = for_stmt.initializer {
                     self.visit_statement(init);
                 }
                 if self.definition.is_some() {
@@ -310,7 +310,7 @@ impl DefinitionFinder {
                     self.pop_scope();
                     return;
                 }
-                if let Some(ref update) = for_stmt.update {
+                if let Some(ref update) = for_stmt.increment {
                     self.visit_expression(update);
                 }
                 if self.definition.is_some() {
@@ -364,23 +364,51 @@ impl DefinitionFinder {
                     }
                 }
             }
-            Expression::Member(member) => {
-                self.visit_expression(&member.object);
-                // Note: member.property is not visited as it's a direct access
+            Expression::Get(get) => {
+                self.visit_expression(&get.object);
             }
-            Expression::Index(index) => {
-                self.visit_expression(&index.object);
+            Expression::Set(set) => {
+                self.visit_expression(&set.object);
                 if self.definition.is_some() {
                     return;
                 }
-                self.visit_expression(&index.index);
+                self.visit_expression(&set.value);
+            }
+            Expression::Index(idx) => {
+                self.visit_expression(&idx.object);
+                if self.definition.is_some() {
+                    return;
+                }
+                self.visit_expression(&idx.index);
+            }
+            Expression::AssignIndex(idx) => {
+                self.visit_expression(&idx.object);
+                if self.definition.is_some() {
+                    return;
+                }
+                self.visit_expression(&idx.index);
+                if self.definition.is_some() {
+                    return;
+                }
+                self.visit_expression(&idx.value);
             }
             Expression::Assignment(assign) => {
-                self.visit_expression(&assign.left);
+                if assign.name.name == self.target {
+                    if let Some(def_range) = self.lookup_in_scopes(&assign.name.name) {
+                        self.definition = Some(self.create_location(def_range));
+                    }
+                }
                 if self.definition.is_some() {
                     return;
                 }
-                self.visit_expression(&assign.right);
+                self.visit_expression(&assign.value);
+            }
+            Expression::Logical(logical) => {
+                self.visit_expression(&logical.left);
+                if self.definition.is_some() {
+                    return;
+                }
+                self.visit_expression(&logical.right);
             }
             Expression::Array(array) => {
                 for element in &array.elements {
@@ -390,9 +418,41 @@ impl DefinitionFinder {
                     }
                 }
             }
-            Expression::Object(object) => {
-                for prop in &object.properties {
-                    self.visit_expression(&prop.value);
+            Expression::Map(map) => {
+                for key in &map.keys {
+                    self.visit_expression(key);
+                    if self.definition.is_some() {
+                        return;
+                    }
+                }
+                for value in &map.values {
+                    self.visit_expression(value);
+                    if self.definition.is_some() {
+                        return;
+                    }
+                }
+            }
+            Expression::Grouping(expr) => {
+                self.visit_expression(expr);
+            }
+            Expression::Postfix(postfix) => {
+                self.visit_expression(&postfix.left);
+            }
+            Expression::InterpolatedString(interp) => {
+                for part in &interp.parts {
+                    self.visit_expression(part);
+                    if self.definition.is_some() {
+                        return;
+                    }
+                }
+            }
+            Expression::Match(match_expr) => {
+                self.visit_expression(&match_expr.target);
+                if self.definition.is_some() {
+                    return;
+                }
+                for arm in &match_expr.arms {
+                    self.visit_expression(&arm.body);
                     if self.definition.is_some() {
                         return;
                     }
@@ -409,7 +469,8 @@ impl DefinitionFinder {
             Expression::Await(await_expr) => {
                 self.visit_expression(&await_expr.argument);
             }
-            _ => {}
+            Expression::This(_this) => {}
+            Expression::Literal(_lit) => {}
         }
     }
 
@@ -510,8 +571,8 @@ impl ReferenceFinder {
                 }
 
                 for param in &func.params {
-                    if param.name.name == self.target {
-                        self.references.push(self.create_location(param.name.range));
+                    if param.name == self.target {
+                        self.references.push(self.create_location(param.range));
                     }
                 }
 
@@ -576,13 +637,13 @@ impl ReferenceFinder {
                 self.visit_statement(&while_stmt.body);
             }
             Statement::For(for_stmt) => {
-                if let Some(ref init) = for_stmt.init {
+                if let Some(ref init) = for_stmt.initializer {
                     self.visit_statement(init);
                 }
                 if let Some(ref condition) = for_stmt.condition {
                     self.visit_expression(condition);
                 }
-                if let Some(ref update) = for_stmt.update {
+                if let Some(ref update) = for_stmt.increment {
                     self.visit_expression(update);
                 }
                 self.visit_statement(&for_stmt.body);
@@ -619,30 +680,62 @@ impl ReferenceFinder {
                     self.visit_expression(arg);
                 }
             }
-            Expression::Member(member) => {
-                self.visit_expression(&member.object);
-                // Property name is not a reference unless it's computed
-                if member.computed {
-                    // In computed member access like obj[prop], prop is a reference
-                    // But our AST doesn't distinguish this case properly
-                }
+            Expression::Literal(_lit) => {}
+            Expression::Get(get) => {
+                self.visit_expression(&get.object);
             }
-            Expression::Index(index) => {
-                self.visit_expression(&index.object);
-                self.visit_expression(&index.index);
+            Expression::Set(set) => {
+                self.visit_expression(&set.object);
+                self.visit_expression(&set.value);
+            }
+            Expression::Index(idx) => {
+                self.visit_expression(&idx.object);
+                self.visit_expression(&idx.index);
+            }
+            Expression::AssignIndex(idx) => {
+                self.visit_expression(&idx.object);
+                self.visit_expression(&idx.index);
+                self.visit_expression(&idx.value);
             }
             Expression::Assignment(assign) => {
-                self.visit_expression(&assign.left);
-                self.visit_expression(&assign.right);
+                if assign.name.name == self.target {
+                    self.references
+                        .push(self.create_location(assign.name.range));
+                }
+                self.visit_expression(&assign.value);
+            }
+            Expression::Logical(logical) => {
+                self.visit_expression(&logical.left);
+                self.visit_expression(&logical.right);
             }
             Expression::Array(array) => {
                 for element in &array.elements {
                     self.visit_expression(element);
                 }
             }
-            Expression::Object(object) => {
-                for prop in &object.properties {
-                    self.visit_expression(&prop.value);
+            Expression::Map(map) => {
+                for key in &map.keys {
+                    self.visit_expression(key);
+                }
+                for value in &map.values {
+                    self.visit_expression(value);
+                }
+            }
+            Expression::Grouping(expr) => {
+                self.visit_expression(expr);
+            }
+            Expression::Postfix(postfix) => {
+                self.visit_expression(&postfix.left);
+            }
+            Expression::InterpolatedString(interp) => {
+                for part in &interp.parts {
+                    self.visit_expression(part);
+                }
+            }
+            Expression::Match(match_expr) => {
+                self.visit_expression(&match_expr.target);
+                for arm in &match_expr.arms {
+                    self.visit_expression(&arm.body);
                 }
             }
             Expression::Function(func_expr) => {
@@ -656,7 +749,7 @@ impl ReferenceFinder {
             Expression::Await(await_expr) => {
                 self.visit_expression(&await_expr.argument);
             }
-            _ => {}
+            Expression::This(_this) => {}
         }
     }
 

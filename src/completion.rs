@@ -210,7 +210,7 @@ async fn get_function_completions(workspace: &WorkspaceManager) -> Vec<Completio
                 let params = func
                     .params
                     .iter()
-                    .map(|p| p.name.name.clone())
+                    .map(|p| p.name.clone())
                     .collect::<Vec<_>>()
                     .join(", ");
 
@@ -267,14 +267,14 @@ fn collect_variables_from_items(items: &[Item], seen_vars: &mut HashSet<String>)
             }
             Item::Function(func) => {
                 for param in &func.params {
-                    seen_vars.insert(param.name.name.clone());
+                    seen_vars.insert(param.name.clone());
                 }
                 collect_variables_from_statements(&func.body.statements, seen_vars);
             }
             Item::Class(class) => {
                 for method in &class.methods {
                     for param in &method.params {
-                        seen_vars.insert(param.name.name.clone());
+                        seen_vars.insert(param.name.clone());
                     }
                     collect_variables_from_statements(&method.body.statements, seen_vars);
                 }
@@ -311,7 +311,7 @@ fn collect_variables_from_statement(stmt: &Statement, seen_vars: &mut HashSet<St
             collect_variables_from_statement(&while_stmt.body, seen_vars);
         }
         Statement::For(for_stmt) => {
-            if let Some(init) = &for_stmt.init {
+            if let Some(init) = &for_stmt.initializer {
                 collect_variables_from_statement(init, seen_vars);
             }
             collect_variables_from_statement(&for_stmt.body, seen_vars);
@@ -331,7 +331,6 @@ fn get_keyword_completions() -> Vec<CompletionItem> {
         ("for", "For loop"),
         ("return", "Return statement"),
         ("this", "Current instance reference"),
-        ("super", "Parent class reference"),
         ("import", "Import statement"),
         ("export", "Export statement"),
         ("async", "Async function modifier"),
@@ -394,6 +393,7 @@ fn get_builtin_completions() -> Vec<CompletionItem> {
             "is_function(value)",
             "Check if value is a function",
         ),
+        ("clock", "clock()", "Get the current time in seconds"),
     ];
 
     builtins

@@ -263,7 +263,7 @@ impl HoverInfoFinder {
                 let params = func
                     .params
                     .iter()
-                    .map(|p| p.name.name.clone())
+                    .map(|p| p.name.clone())
                     .collect::<Vec<_>>()
                     .join(", ");
 
@@ -273,12 +273,15 @@ impl HoverInfoFinder {
                     name: func.name.name.clone(),
                     symbol_type: SymbolType::Function,
                     signature: Some(signature.clone()),
-                    documentation: if func.decorators.is_empty() {
+                    documentation: if func.attributes.is_empty() {
                         None
                     } else {
                         Some(format!(
-                            "Decorators: {:?}",
-                            func.decorators.iter().map(|d| &d.name).collect::<Vec<_>>()
+                            "Attributes: {:?}",
+                            func.attributes
+                                .iter()
+                                .map(|d| &d.name.name)
+                                .collect::<Vec<_>>()
                         ))
                     },
                     range: func.name.range,
@@ -294,13 +297,13 @@ impl HoverInfoFinder {
                 self.push_scope();
                 for param in &func.params {
                     let param_info = SymbolInfo {
-                        name: param.name.name.clone(),
+                        name: param.name.clone(),
                         symbol_type: SymbolType::Parameter,
-                        signature: Some(format!("{}: parameter", param.name.name)),
+                        signature: Some(format!("{}: parameter", param.name)),
                         documentation: None,
-                        range: param.name.range,
+                        range: param.range,
                     };
-                    self.add_to_scope(&param.name.name, param_info);
+                    self.add_to_scope(&param.name, param_info);
                 }
 
                 self.visit_block(&func.body);
@@ -311,11 +314,7 @@ impl HoverInfoFinder {
                     name: class.name.name.clone(),
                     symbol_type: SymbolType::Class,
                     signature: Some(format!("class {}", class.name.name)),
-                    documentation: if let Some(ref super_class) = class.super_class {
-                        Some(format!("Extends: {}", super_class.name))
-                    } else {
-                        None
-                    },
+                    documentation: None,
                     range: class.name.range,
                 };
 
@@ -331,7 +330,7 @@ impl HoverInfoFinder {
                     let params = method
                         .params
                         .iter()
-                        .map(|p| p.name.name.clone())
+                        .map(|p| p.name.clone())
                         .collect::<Vec<_>>()
                         .join(", ");
 
@@ -447,7 +446,7 @@ impl HoverInfoFinder {
             }
             Statement::For(for_stmt) => {
                 self.push_scope();
-                if let Some(ref init) = for_stmt.init {
+                if let Some(ref init) = for_stmt.initializer {
                     self.visit_statement(init);
                 }
                 if self.hover_info.is_some() {
@@ -461,7 +460,7 @@ impl HoverInfoFinder {
                     self.pop_scope();
                     return;
                 }
-                if let Some(ref update) = for_stmt.update {
+                if let Some(ref update) = for_stmt.increment {
                     self.visit_expression(update);
                 }
                 if self.hover_info.is_some() {
@@ -514,22 +513,43 @@ impl HoverInfoFinder {
                     }
                 }
             }
-            Expression::Member(member) => {
-                self.visit_expression(&member.object);
+            Expression::Get(get) => {
+                self.visit_expression(&get.object);
             }
-            Expression::Index(index) => {
-                self.visit_expression(&index.object);
+            Expression::Set(set) => {
+                self.visit_expression(&set.object);
                 if self.hover_info.is_some() {
                     return;
                 }
-                self.visit_expression(&index.index);
+                self.visit_expression(&set.value);
+            }
+            Expression::Index(idx) => {
+                self.visit_expression(&idx.object);
+                if self.hover_info.is_some() {
+                    return;
+                }
+                self.visit_expression(&idx.index);
+            }
+            Expression::AssignIndex(idx) => {
+                self.visit_expression(&idx.object);
+                if self.hover_info.is_some() {
+                    return;
+                }
+                self.visit_expression(&idx.index);
+                if self.hover_info.is_some() {
+                    return;
+                }
+                self.visit_expression(&idx.value);
             }
             Expression::Assignment(assign) => {
-                self.visit_expression(&assign.left);
+                self.visit_expression(&assign.value);
+            }
+            Expression::Logical(logical) => {
+                self.visit_expression(&logical.left);
                 if self.hover_info.is_some() {
                     return;
                 }
-                self.visit_expression(&assign.right);
+                self.visit_expression(&logical.right);
             }
             Expression::Array(array) => {
                 for element in &array.elements {
@@ -539,9 +559,41 @@ impl HoverInfoFinder {
                     }
                 }
             }
-            Expression::Object(object) => {
-                for prop in &object.properties {
-                    self.visit_expression(&prop.value);
+            Expression::Map(map) => {
+                for key in &map.keys {
+                    self.visit_expression(key);
+                    if self.hover_info.is_some() {
+                        return;
+                    }
+                }
+                for value in &map.values {
+                    self.visit_expression(value);
+                    if self.hover_info.is_some() {
+                        return;
+                    }
+                }
+            }
+            Expression::Grouping(expr) => {
+                self.visit_expression(expr);
+            }
+            Expression::Postfix(postfix) => {
+                self.visit_expression(&postfix.left);
+            }
+            Expression::InterpolatedString(interp) => {
+                for part in &interp.parts {
+                    self.visit_expression(part);
+                    if self.hover_info.is_some() {
+                        return;
+                    }
+                }
+            }
+            Expression::Match(match_expr) => {
+                self.visit_expression(&match_expr.target);
+                if self.hover_info.is_some() {
+                    return;
+                }
+                for arm in &match_expr.arms {
+                    self.visit_expression(&arm.body);
                     if self.hover_info.is_some() {
                         return;
                     }
@@ -571,16 +623,16 @@ impl HoverInfoFinder {
 
     fn infer_variable_type(&self, value: Option<&Expression>) -> String {
         match value {
-            Some(Expression::Literal(literal)) => match literal {
+            Some(Expression::Literal(literal)) => match literal.value {
                 crate::parser::Literal::String(_) => "string".to_string(),
                 crate::parser::Literal::Number(_) => "number".to_string(),
                 crate::parser::Literal::Boolean(_) => "boolean".to_string(),
                 crate::parser::Literal::Nil => "nil".to_string(),
             },
             Some(Expression::Array(_)) => "array".to_string(),
-            Some(Expression::Object(_)) => "object".to_string(),
+            Some(Expression::Map(_)) => "map".to_string(),
             Some(Expression::Function(_)) => "function".to_string(),
-            Some(Expression::Call(_)) => "any".to_string(), // Could be more sophisticated
+            Some(Expression::Call(_)) => "any".to_string(),
             _ => "any".to_string(),
         }
     }

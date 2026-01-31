@@ -138,7 +138,7 @@ pub struct Lexer<'a> {
     current_char: Option<char>,
     position: TextSize,
     start_position: TextSize,
-    interp_depth: usize,
+    interp_stack: Vec<usize>,
     brace_depth: usize,
 }
 
@@ -153,7 +153,7 @@ impl<'a> Lexer<'a> {
             current_char,
             position: TextSize::new(0),
             start_position: TextSize::new(0),
-            interp_depth: 0,
+            interp_stack: Vec::new(),
             brace_depth: 0,
         }
     }
@@ -225,6 +225,13 @@ impl<'a> Lexer<'a> {
                 Some(self.single_char_token(TokenKind::LeftBrace))
             }
             '}' => {
+                if let Some(&start_depth) = self.interp_stack.last() {
+                    if self.brace_depth == start_depth {
+                        self.advance(); // skip '}'
+                        self.interp_stack.pop();
+                        return self.string();
+                    }
+                }
                 if self.brace_depth > 0 {
                     self.brace_depth -= 1;
                 }
@@ -421,22 +428,34 @@ impl<'a> Lexer<'a> {
     }
 
     fn string(&mut self) -> Option<Token> {
-        self.advance(); // Skip opening quote
+        // Only skip opening quote if we are not continuing from an interpolation
+        let is_continuation = !self.interp_stack.is_empty();
+        if !is_continuation && self.current_char == Some('"') {
+            self.advance();
+        }
 
         while let Some(ch) = self.current_char {
             if ch == '"' {
-                break;
+                self.advance();
+                if self.interp_stack.is_empty() {
+                    return Some(self.make_token(TokenKind::String));
+                } else {
+                    // This case shouldn't happen with correct nesting, but for safety:
+                    return Some(self.make_token(TokenKind::String));
+                }
             }
 
             if ch == '$' && self.peek() == Some('{') {
-                // Handle string interpolation
-                if self.start_position == self.position - TextSize::new(1) {
-                    // This is the start of an interpolated string
-                    return Some(self.make_token(TokenKind::StringInterpStart));
+                let token_kind = if is_continuation {
+                    TokenKind::StringInterpMiddle
                 } else {
-                    // This is a middle part
-                    return Some(self.make_token(TokenKind::StringInterpMiddle));
-                }
+                    TokenKind::StringInterpStart
+                };
+                let token = self.make_token(token_kind);
+                self.advance(); // $
+                self.advance(); // {
+                self.interp_stack.push(self.brace_depth);
+                return Some(token);
             }
 
             if ch == '\\' {
@@ -449,9 +468,16 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        if self.current_char == Some('"') {
-            self.advance(); // Skip closing quote
+        if !is_continuation && self.current_char == Some('"') {
+            self.advance();
             Some(self.make_token(TokenKind::String))
+        } else if is_continuation && self.is_at_end() {
+            // Maybe we should return StringInterpEnd if it ended?
+            // But usually it ends with '"'
+            Some(self.error_token("Unterminated interpolated string"))
+        } else if self.current_char == Some('"') {
+            self.advance();
+            Some(self.make_token(TokenKind::StringInterpEnd))
         } else {
             Some(self.error_token("Unterminated string"))
         }

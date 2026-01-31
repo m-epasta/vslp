@@ -61,14 +61,12 @@ impl VScriptAnalyzer {
 
         // Add built-in functions
         for builtin in &[
-            "print",
-            "println",
-            "len",
-            "push",
-            "pop",
-            "slice",
-            "to_string",
-            "to_number",
+            "clock",
+            "type_of",
+            "is_array",
+            "is_string",
+            "is_number",
+            "is_function",
         ] {
             global_scope.insert(
                 builtin.to_string(),
@@ -161,13 +159,13 @@ impl VScriptAnalyzer {
                 // Add parameters to function scope
                 for param in &func.params {
                     func_scope.insert(
-                        param.name.name.clone(),
+                        param.name.clone(),
                         Symbol {
-                            name: param.name.name.clone(),
+                            name: param.name.clone(),
                             kind: SymbolKind::VARIABLE,
                             range: param.range,
                             uri: uri.clone(),
-                            definition_range: param.name.range,
+                            definition_range: param.range,
                         },
                     );
                 }
@@ -295,13 +293,13 @@ impl VScriptAnalyzer {
             }
             Statement::For(for_stmt) => {
                 let mut for_scope = Scope::with_parent(scope.clone());
-                if let Some(ref init) = for_stmt.init {
+                if let Some(ref init) = for_stmt.initializer {
                     self.analyze_statement(init, &mut for_scope, uri, content, diagnostics);
                 }
                 if let Some(ref condition) = for_stmt.condition {
                     self.analyze_expression(condition, &mut for_scope, uri, content, diagnostics);
                 }
-                if let Some(ref update) = for_stmt.update {
+                if let Some(ref update) = for_stmt.increment {
                     self.analyze_expression(update, &mut for_scope, uri, content, diagnostics);
                 }
                 self.analyze_statement(&for_stmt.body, &mut for_scope, uri, content, diagnostics);
@@ -356,25 +354,54 @@ impl VScriptAnalyzer {
                     self.analyze_expression(arg, scope, uri, content, diagnostics);
                 }
             }
-            Expression::Member(member) => {
-                self.analyze_expression(&member.object, scope, uri, content, diagnostics);
+            Expression::Get(get) => {
+                self.analyze_expression(&get.object, scope, uri, content, diagnostics);
+            }
+            Expression::Set(set) => {
+                self.analyze_expression(&set.object, scope, uri, content, diagnostics);
+                self.analyze_expression(&set.value, scope, uri, content, diagnostics);
             }
             Expression::Index(index) => {
                 self.analyze_expression(&index.object, scope, uri, content, diagnostics);
                 self.analyze_expression(&index.index, scope, uri, content, diagnostics);
             }
+            Expression::AssignIndex(idx) => {
+                self.analyze_expression(&idx.object, scope, uri, content, diagnostics);
+                self.analyze_expression(&idx.index, scope, uri, content, diagnostics);
+                self.analyze_expression(&idx.value, scope, uri, content, diagnostics);
+            }
             Expression::Assignment(assign) => {
-                self.analyze_expression(&assign.left, scope, uri, content, diagnostics);
-                self.analyze_expression(&assign.right, scope, uri, content, diagnostics);
+                // Check if variable is defined
+                if scope.lookup(&assign.name.name).is_none() {
+                    diagnostics.push(Diagnostic {
+                        range: self.text_range_to_lsp_range(assign.name.range, content),
+                        severity: Some(DiagnosticSeverity::ERROR),
+                        code: None,
+                        code_description: None,
+                        source: Some("vscript".to_string()),
+                        message: format!("Undefined variable '{}'", assign.name.name),
+                        related_information: None,
+                        tags: None,
+                        data: None,
+                    });
+                }
+                self.analyze_expression(&assign.value, scope, uri, content, diagnostics);
+            }
+            Expression::Logical(logical) => {
+                self.analyze_expression(&logical.left, scope, uri, content, diagnostics);
+                self.analyze_expression(&logical.right, scope, uri, content, diagnostics);
             }
             Expression::Array(array) => {
                 for element in &array.elements {
                     self.analyze_expression(element, scope, uri, content, diagnostics);
                 }
             }
-            Expression::Object(object) => {
-                for prop in &object.properties {
-                    self.analyze_expression(&prop.value, scope, uri, content, diagnostics);
+            Expression::Map(map) => {
+                for key in &map.keys {
+                    self.analyze_expression(key, scope, uri, content, diagnostics);
+                }
+                for value in &map.values {
+                    self.analyze_expression(value, scope, uri, content, diagnostics);
                 }
             }
             Expression::Function(func_expr) => {
@@ -396,7 +423,25 @@ impl VScriptAnalyzer {
             Expression::Await(await_expr) => {
                 self.analyze_expression(&await_expr.argument, scope, uri, content, diagnostics);
             }
-            _ => {} // Handle other expressions
+            Expression::Match(match_expr) => {
+                self.analyze_expression(&match_expr.target, scope, uri, content, diagnostics);
+                for arm in &match_expr.arms {
+                    self.analyze_expression(&arm.body, scope, uri, content, diagnostics);
+                }
+            }
+            Expression::Literal(_lit) => {}
+            Expression::This(_this) => {}
+            Expression::Postfix(postfix) => {
+                self.analyze_expression(&postfix.left, scope, uri, content, diagnostics);
+            }
+            Expression::Grouping(expr) => {
+                self.analyze_expression(expr, scope, uri, content, diagnostics);
+            }
+            Expression::InterpolatedString(interp) => {
+                for part in &interp.parts {
+                    self.analyze_expression(part, scope, uri, content, diagnostics);
+                }
+            }
         }
     }
 

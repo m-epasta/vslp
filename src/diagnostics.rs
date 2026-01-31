@@ -263,7 +263,7 @@ impl SemanticChecker {
 
         // Add parameters to scope
         for param in &func.params {
-            self.add_symbol(&param.name.name, SymbolType::Parameter, param.name.range);
+            self.add_symbol(&param.name, SymbolType::Parameter, param.range);
         }
 
         self.check_block(&func.body);
@@ -345,13 +345,13 @@ impl SemanticChecker {
                 self.loop_depth += 1;
                 self.push_scope();
 
-                if let Some(ref init) = for_stmt.init {
+                if let Some(ref init) = for_stmt.initializer {
                     self.check_statement(init);
                 }
                 if let Some(ref condition) = for_stmt.condition {
                     self.check_expression(condition);
                 }
-                if let Some(ref update) = for_stmt.update {
+                if let Some(ref update) = for_stmt.increment {
                     self.check_expression(update);
                 }
                 self.check_statement(&for_stmt.body);
@@ -404,6 +404,9 @@ impl SemanticChecker {
                     self.mark_symbol_used(&id.name);
                 }
             }
+            crate::parser::Expression::Literal(_lit) => {
+                // Literals are always defined
+            }
             crate::parser::Expression::Binary(binary) => {
                 self.check_expression(&binary.left);
                 self.check_expression(&binary.right);
@@ -413,15 +416,15 @@ impl SemanticChecker {
                     binary.operator,
                     crate::parser::BinaryOperator::Divide | crate::parser::BinaryOperator::Modulo
                 ) {
-                    if let crate::parser::Expression::Literal(crate::parser::Literal::Number(n)) =
-                        binary.right.as_ref()
-                    {
-                        if *n == 0.0 {
-                            self.add_warning(
-                                "Division by zero".to_string(),
-                                binary.range,
-                                Some("division_by_zero".to_string()),
-                            );
+                    if let crate::parser::Expression::Literal(lit) = binary.right.as_ref() {
+                        if let crate::parser::Literal::Number(n) = &lit.value {
+                            if *n == 0.0 {
+                                self.add_warning(
+                                    "Division by zero".to_string(),
+                                    binary.range,
+                                    Some("division_by_zero".to_string()),
+                                );
+                            }
                         }
                     }
                 }
@@ -429,31 +432,47 @@ impl SemanticChecker {
             crate::parser::Expression::Unary(unary) => {
                 self.check_expression(&unary.operand);
             }
+            crate::parser::Expression::Logical(logical) => {
+                self.check_expression(&logical.left);
+                self.check_expression(&logical.right);
+            }
             crate::parser::Expression::Call(call) => {
                 self.check_expression(&call.callee);
                 for arg in &call.arguments {
                     self.check_expression(arg);
                 }
             }
-            crate::parser::Expression::Member(member) => {
-                self.check_expression(&member.object);
+            crate::parser::Expression::Get(get) => {
+                self.check_expression(&get.object);
             }
-            crate::parser::Expression::Index(index) => {
-                self.check_expression(&index.object);
-                self.check_expression(&index.index);
+            crate::parser::Expression::Set(set) => {
+                self.check_expression(&set.object);
+                self.check_expression(&set.value);
+            }
+            crate::parser::Expression::Index(idx) => {
+                self.check_expression(&idx.object);
+                self.check_expression(&idx.index);
+            }
+            crate::parser::Expression::AssignIndex(idx) => {
+                self.check_expression(&idx.object);
+                self.check_expression(&idx.index);
+                self.check_expression(&idx.value);
             }
             crate::parser::Expression::Assignment(assign) => {
-                self.check_expression(&assign.left);
-                self.check_expression(&assign.right);
+                self.check_expression(&crate::parser::Expression::Identifier(assign.name.clone()));
+                self.check_expression(&assign.value);
             }
             crate::parser::Expression::Array(array) => {
                 for element in &array.elements {
                     self.check_expression(element);
                 }
             }
-            crate::parser::Expression::Object(object) => {
-                for prop in &object.properties {
-                    self.check_expression(&prop.value);
+            crate::parser::Expression::Map(map) => {
+                for key in &map.keys {
+                    self.check_expression(key);
+                }
+                for value in &map.values {
+                    self.check_expression(value);
                 }
             }
             crate::parser::Expression::Function(func_expr) => {

@@ -250,9 +250,36 @@ impl LanguageServer for VScriptLanguageServer {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    let args: Vec<String> = std::env::args().collect();
+    let log_file = args
+        .iter()
+        .position(|arg| arg == "--log-file")
+        .and_then(|pos| args.get(pos + 1));
+
+    if let Some(path) = log_file {
+        let file_path = std::path::Path::new(path);
+        let directory = file_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let file_name = file_path
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new("vslp.log"));
+
+        let file_appender = tracing_appender::rolling::never(directory, file_name);
+        let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_writer(non_blocking)
+            .init();
+
+        // We need to keep the guard alive
+        std::mem::forget(_guard);
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .init();
+    }
 
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
