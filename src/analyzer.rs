@@ -193,6 +193,30 @@ impl VScriptAnalyzer {
                     self.analyze_item(&method_item, scope, uri, content, diagnostics);
                 }
             }
+            Item::Struct(strct) => {
+                scope.insert(
+                    strct.name.name.clone(),
+                    Symbol {
+                        name: strct.name.name.clone(),
+                        kind: SymbolKind::STRUCT,
+                        range: strct.range,
+                        uri: uri.clone(),
+                        definition_range: strct.name.range,
+                    },
+                );
+            }
+            Item::Enum(enm) => {
+                scope.insert(
+                    enm.name.name.clone(),
+                    Symbol {
+                        name: enm.name.name.clone(),
+                        kind: SymbolKind::ENUM,
+                        range: enm.range,
+                        uri: uri.clone(),
+                        definition_range: enm.name.range,
+                    },
+                );
+            }
             Item::VariableDeclaration(var_decl) => {
                 scope.insert(
                     var_decl.name.name.clone(),
@@ -436,6 +460,26 @@ impl VScriptAnalyzer {
                 deprecated: None,
                 range: self.text_range_to_lsp_range(var_decl.range, content),
                 selection_range: self.text_range_to_lsp_range(var_decl.name.range, content),
+                children: None,
+            }),
+            Item::Struct(strct) => Some(DocumentSymbol {
+                name: strct.name.name.clone(),
+                detail: Some("struct".to_string()),
+                kind: SymbolKind::STRUCT,
+                tags: None,
+                deprecated: None,
+                range: self.text_range_to_lsp_range(strct.range, content),
+                selection_range: self.text_range_to_lsp_range(strct.name.range, content),
+                children: None,
+            }),
+            Item::Enum(enm) => Some(DocumentSymbol {
+                name: enm.name.name.clone(),
+                detail: Some("enum".to_string()),
+                kind: SymbolKind::ENUM,
+                tags: None,
+                deprecated: None,
+                range: self.text_range_to_lsp_range(enm.range, content),
+                selection_range: self.text_range_to_lsp_range(enm.name.range, content),
                 children: None,
             }),
             _ => None,

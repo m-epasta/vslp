@@ -159,11 +159,39 @@ impl<'a> Lexer<'a> {
     }
 
     pub fn tokenize(&mut self) -> Vec<Token> {
-        let mut tokens = Vec::new();
+        let mut tokens: Vec<Token> = Vec::new();
 
         while !self.is_at_end() {
             self.start_position = self.position;
             if let Some(token) = self.next_token() {
+                if token.kind == TokenKind::Newline {
+                    if let Some(last_real) = tokens
+                        .iter()
+                        .rev()
+                        .find(|t| !matches!(t.kind, TokenKind::Whitespace | TokenKind::Comment))
+                    {
+                        if matches!(
+                            last_real.kind,
+                            TokenKind::Identifier
+                                | TokenKind::Number
+                                | TokenKind::String
+                                | TokenKind::RightParen
+                                | TokenKind::RightBrace
+                                | TokenKind::RightBracket
+                                | TokenKind::True
+                                | TokenKind::False
+                                | TokenKind::Nil
+                                | TokenKind::Return
+                                | TokenKind::Let
+                        ) {
+                            tokens.push(Token::new(
+                                TokenKind::Semicolon,
+                                ";".to_string(),
+                                token.range,
+                            ));
+                        }
+                    }
+                }
                 tokens.push(token);
             }
         }
@@ -179,8 +207,8 @@ impl<'a> Lexer<'a> {
 
     fn next_token(&mut self) -> Option<Token> {
         match self.current_char? {
-            ' ' | '\r' | '\t' => self.whitespace(),
             '\n' => self.newline(),
+            c if c.is_whitespace() => self.whitespace(),
             '/' => {
                 if self.peek() == Some('/') {
                     self.line_comment()
@@ -346,7 +374,7 @@ impl<'a> Lexer<'a> {
 
     fn whitespace(&mut self) -> Option<Token> {
         while let Some(ch) = self.current_char {
-            if ch == ' ' || ch == '\r' || ch == '\t' {
+            if ch.is_whitespace() && ch != '\n' {
                 self.advance();
             } else {
                 break;

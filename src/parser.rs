@@ -41,6 +41,8 @@ pub enum Item {
     VariableDeclaration(VariableDeclaration),
     Import(Import),
     Export(Export),
+    Struct(Struct),
+    Enum(Enum),
     Statement(Statement),
 }
 
@@ -97,6 +99,38 @@ pub struct Parameter {
 pub struct Decorator {
     pub name: String,
     pub args: Vec<Expression>,
+    pub range: TextRange,
+}
+
+#[derive(Debug, Clone)]
+pub struct Struct {
+    pub name: Identifier,
+    pub fields: Vec<StructField>,
+    pub decorators: Vec<Decorator>,
+    pub range: TextRange,
+}
+
+#[derive(Debug, Clone)]
+pub struct StructField {
+    pub name: Identifier,
+    pub type_name: Identifier,
+    pub initializer: Option<Expression>,
+    pub decorators: Vec<Decorator>,
+    pub range: TextRange,
+}
+
+#[derive(Debug, Clone)]
+pub struct Enum {
+    pub name: Identifier,
+    pub variants: Vec<EnumVariant>,
+    pub decorators: Vec<Decorator>,
+    pub range: TextRange,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumVariant {
+    pub name: Identifier,
+    pub params: Vec<Identifier>,
     pub range: TextRange,
 }
 
@@ -334,7 +368,16 @@ pub struct Parser {
 
 impl Parser {
     pub fn new(mut lexer: Lexer) -> Self {
-        let tokens = lexer.tokenize();
+        let tokens = lexer
+            .tokenize()
+            .into_iter()
+            .filter(|t| {
+                !matches!(
+                    t.kind,
+                    TokenKind::Whitespace | TokenKind::Comment | TokenKind::Newline
+                )
+            })
+            .collect();
         Self {
             tokens,
             current: 0,
@@ -353,7 +396,10 @@ impl Parser {
         while !self.is_at_end() {
             if matches!(
                 self.current_token().kind,
-                TokenKind::Whitespace | TokenKind::Comment | TokenKind::Newline
+                TokenKind::Whitespace
+                    | TokenKind::Comment
+                    | TokenKind::Newline
+                    | TokenKind::Semicolon
             ) {
                 self.advance();
                 continue;
@@ -408,6 +454,20 @@ impl Parser {
             )),
             TokenKind::Import => Ok(Item::Import(self.parse_import()?)),
             TokenKind::Export => Ok(Item::Export(self.parse_export()?)),
+            TokenKind::Struct => {
+                let mut strct = self.parse_struct()?;
+                if let Item::Struct(ref mut s) = strct {
+                    s.decorators = decorators;
+                }
+                Ok(strct)
+            }
+            TokenKind::Enum => {
+                let mut enm = self.parse_enum()?;
+                if let Item::Enum(ref mut e) = enm {
+                    e.decorators = decorators;
+                }
+                Ok(enm)
+            }
             _ => Ok(Item::Statement(self.parse_statement()?)),
         }
     }
@@ -496,7 +556,10 @@ impl Parser {
         while !self.check(&TokenKind::RightBrace) && !self.is_at_end() {
             if matches!(
                 self.current_token().kind,
-                TokenKind::Whitespace | TokenKind::Comment | TokenKind::Newline
+                TokenKind::Whitespace
+                    | TokenKind::Comment
+                    | TokenKind::Newline
+                    | TokenKind::Semicolon
             ) {
                 self.advance();
                 continue;
@@ -529,6 +592,125 @@ impl Parser {
         }))
     }
 
+    fn parse_struct(&mut self) -> Result<Item, ParseError> {
+        let start = self.current_token().range.start();
+        self.consume(&TokenKind::Struct, "Expected 'struct'")?;
+        let name = self.consume_identifier("Expected struct name")?;
+
+        self.consume(&TokenKind::LeftBrace, "Expected '{'")?;
+
+        let mut fields = Vec::new();
+        while !self.check(&TokenKind::RightBrace) && !self.is_at_end() {
+            if matches!(
+                self.current_token().kind,
+                TokenKind::Whitespace
+                    | TokenKind::Comment
+                    | TokenKind::Newline
+                    | TokenKind::Semicolon
+            ) {
+                self.advance();
+                continue;
+            }
+
+            let mut f_decorators = Vec::new();
+            while self.check(&TokenKind::AtBracket) {
+                f_decorators.push(self.parse_decorator()?);
+            }
+
+            let f_start = self.current_token().range.start();
+            let f_name = self.consume_identifier("Expected field name")?;
+            let f_type = self.consume_identifier("Expected field type")?;
+
+            let initializer = if self.match_token(TokenKind::Equal) {
+                Some(self.parse_expression()?)
+            } else {
+                None
+            };
+
+            let f_end = self.previous_token().range.end();
+            fields.push(StructField {
+                name: f_name,
+                type_name: f_type,
+                initializer,
+                decorators: f_decorators,
+                range: TextRange::new(f_start, f_end),
+            });
+
+            // Optional comma or semicolon
+            if !self.match_token(TokenKind::Comma) {
+                let _ = self.match_token(TokenKind::Semicolon);
+            }
+        }
+
+        self.consume(&TokenKind::RightBrace, "Expected '}'")?;
+        let end = self.previous_token().range.end();
+
+        Ok(Item::Struct(Struct {
+            name,
+            fields,
+            decorators: Vec::new(),
+            range: TextRange::new(start, end),
+        }))
+    }
+
+    fn parse_enum(&mut self) -> Result<Item, ParseError> {
+        let start = self.current_token().range.start();
+        self.consume(&TokenKind::Enum, "Expected 'enum'")?;
+        let name = self.consume_identifier("Expected enum name")?;
+
+        self.consume(&TokenKind::LeftBrace, "Expected '{'")?;
+
+        let mut variants = Vec::new();
+        while !self.check(&TokenKind::RightBrace) && !self.is_at_end() {
+            if matches!(
+                self.current_token().kind,
+                TokenKind::Whitespace
+                    | TokenKind::Comment
+                    | TokenKind::Newline
+                    | TokenKind::Semicolon
+            ) {
+                self.advance();
+                continue;
+            }
+
+            let v_start = self.current_token().range.start();
+            let v_name = self.consume_identifier("Expected variant name")?;
+            let mut params = Vec::new();
+
+            if self.match_token(TokenKind::LeftParen) {
+                while !self.check(&TokenKind::RightParen) && !self.is_at_end() {
+                    params.push(self.consume_identifier("Expected parameter type name")?);
+                    if !self.check(&TokenKind::RightParen) {
+                        self.consume(&TokenKind::Comma, "Expected ','")?;
+                    }
+                }
+                self.consume(&TokenKind::RightParen, "Expected ')'")?;
+            }
+
+            let v_end = self.previous_token().range.end();
+            variants.push(EnumVariant {
+                name: v_name,
+                params,
+                range: TextRange::new(v_start, v_end),
+            });
+
+            // Optional comma or semicolon
+            if !self.match_token(TokenKind::Comma) {
+                let _ = self.match_token(TokenKind::Semicolon);
+            }
+        }
+
+        self.consume(&TokenKind::RightBrace, "Expected '}'")?;
+        let end = self.previous_token().range.end();
+
+        Ok(Item::Enum(Enum {
+            name,
+            variants,
+            decorators: Vec::new(),
+            range: TextRange::new(start, end),
+        }))
+    }
+
     fn parse_variable_declaration(&mut self) -> Result<VariableDeclaration, ParseError> {
         let start = self.current_token().range.start();
         self.consume(&TokenKind::Let, "Expected 'let'")?;
@@ -542,6 +724,8 @@ impl Parser {
         };
 
         let end = self.previous_token().range.end();
+        let _ = self.match_token(TokenKind::Semicolon);
+
         Ok(VariableDeclaration {
             name,
             value,
@@ -565,6 +749,8 @@ impl Parser {
         };
 
         let end = self.previous_token().range.end();
+        let _ = self.match_token(TokenKind::Semicolon);
+
         Ok(Import {
             path,
             alias: None,
@@ -615,7 +801,11 @@ impl Parser {
             TokenKind::Let => Ok(Statement::VariableDeclaration(
                 self.parse_variable_declaration()?,
             )),
-            _ => Ok(Statement::Expression(self.parse_expression()?)),
+            _ => {
+                let expr = self.parse_expression()?;
+                let _ = self.match_token(TokenKind::Semicolon);
+                Ok(Statement::Expression(expr))
+            }
         }
     }
 
@@ -662,16 +852,11 @@ impl Parser {
         self.consume(&TokenKind::For, "Expected 'for'")?;
 
         let init = if self.check(&TokenKind::Semicolon) {
+            self.advance();
             None
         } else {
             Some(Box::new(self.parse_statement()?))
         };
-
-        if !self.check(&TokenKind::Semicolon) {
-            self.consume(&TokenKind::Semicolon, "Expected ';'")?;
-        } else {
-            self.advance();
-        }
 
         let condition = if self.check(&TokenKind::Semicolon) {
             None
@@ -703,16 +888,15 @@ impl Parser {
         let start = self.current_token().range.start();
         self.consume(&TokenKind::Return, "Expected 'return'")?;
 
-        let value = if self.check(&TokenKind::Semicolon)
-            || self.check(&TokenKind::Newline)
-            || self.check(&TokenKind::RightBrace)
-        {
+        let value = if self.check(&TokenKind::Semicolon) || self.check(&TokenKind::RightBrace) {
             None
         } else {
             Some(self.parse_expression()?)
         };
 
         let end = self.previous_token().range.end();
+        let _ = self.match_token(TokenKind::Semicolon);
+
         Ok(ReturnStatement {
             value,
             range: TextRange::new(start, end),
@@ -727,7 +911,10 @@ impl Parser {
         while !self.check(&TokenKind::RightBrace) && !self.is_at_end() {
             if matches!(
                 self.current_token().kind,
-                TokenKind::Whitespace | TokenKind::Comment | TokenKind::Newline
+                TokenKind::Whitespace
+                    | TokenKind::Comment
+                    | TokenKind::Newline
+                    | TokenKind::Semicolon
             ) {
                 self.advance();
                 continue;
@@ -1095,6 +1282,15 @@ impl Parser {
         }
     }
 
+    fn match_token(&mut self, kind: TokenKind) -> bool {
+        if self.check(&kind) {
+            self.advance();
+            true
+        } else {
+            false
+        }
+    }
+
     fn consume_identifier(&mut self, message: &str) -> Result<Identifier, ParseError> {
         if self.check(&TokenKind::Identifier) {
             let token = self.advance();
@@ -1139,11 +1335,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parser_creation() {
-        let input = "let x = 42";
+    fn test_parse_multiple_statements_no_semicolon() {
+        let input = "let x = 10\nlet y = 20";
         let lexer = Lexer::new(input);
-        let _parser = Parser::new(lexer);
-        // Just test that we can create a parser
-        assert!(true);
+        let mut parser = Parser::new(lexer);
+        let result = parser.parse();
+
+        assert_eq!(
+            result.errors.len(),
+            0,
+            "Expected no parse errors, but got: {:?}",
+            result.errors
+        );
+        assert_eq!(result.value.items.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_if_else_no_semicolon() {
+        let input = "if (true) x = 1\nelse x = 2";
+        let lexer = Lexer::new(input);
+        let mut parser = Parser::new(lexer);
+        let result = parser.parse();
+
+        assert_eq!(
+            result.errors.len(),
+            0,
+            "Expected no parse errors, but got: {:?}",
+            result.errors
+        );
+        assert_eq!(result.value.items.len(), 1);
     }
 }
